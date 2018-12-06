@@ -1,0 +1,16 @@
+{
+  "name": "super-simple-guestbook",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Ho Jia Liang",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "cloudinary": "^1.13.2",
+    "lokijs": "^1.5.5"
+  }
+}
