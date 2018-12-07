@@ -1,4 +1,4 @@
-var http = require("http");
+var http = require("turbo-http");
 var https = require("https");
 var qs = require("querystring");
 var fs = require("fs");
@@ -7,8 +7,8 @@ var cloudinary = require("cloudinary");
 
 cloudinary.config({
     cloud_name: "hm6jonksx",
-    api_key: "KEY",
-    api_secret: "SECRET"
+    api_key: "",
+    api_secret: ""
 });
 
 var dbChanged = false;
@@ -21,7 +21,7 @@ var req, res, path = "";
 
 //////////
 
-setInterval(function () {
+setInterval(function() {
     console.log("Scheduled tasks started.");
 
     if (dbChanged) {
@@ -47,7 +47,8 @@ function initDB() {
 
 function initServer() {
     console.log("Server started");
-    http.createServer(function (request, response) {
+
+    http.createServer(function(request, response) {
         req = request;
         res = response;
 
@@ -59,10 +60,14 @@ function initServer() {
 
         if (path === "") return end(404);
 
-        ip = req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+        ip = req.getHeader("x-forwarded-for") || "0.0.0.0";
         today = (new Date()).toLocaleDateString();
 
-        parseBody().then(router);
+        if (req.method === "GET") {
+            router();
+        } else {
+            request.ondata = parseBody;
+        }
     }).listen(process.env.PORT || 8080);
 }
 
@@ -94,30 +99,20 @@ function end(input) {
     res.end(JSON.stringify(results));
 }
 
-function parseBody() {
-    return new Promise(function (resolve, reject) {
-        if (req.method === "GET") return resolve();
+function parseBody(buffer, start, length) {
+    if (length > 10000) return end(413);
 
-        var body = "";
+    var obj, str = buffer.slice(start, start + length).toString("utf8");
 
-        req.on("data", function (data) { if ((body += data).length > 10000) reject(413); });
-        req.on("end", function () {
-            try {
-                resolve(JSON.parse(body));
-            } catch (exception) {
-                reject({
-                    statusCode: 400,
-                    message: "Request body is not valid JSON."
-                });
-            }
+    try {
+        obj = JSON.parse(str);
+        router(obj);
+    } catch (exception) {
+        end({
+            statusCode: 400,
+            message: exception
         });
-        req.on("error", function () {
-            reject({
-                statusCode: 500,
-                message: "Error occured while receiving request body."
-            })
-        });
-    });
+    }
 }
 
 function router(body) {
@@ -128,16 +123,16 @@ function router(body) {
 //////////
 
 function uploadToCloudinary(obj) {
-	var filename = obj.filename;
-	var data = obj.data;
+    var filename = obj.filename;
+    var data = obj.data;
 
-    return new Promise(function (resolve, reject) {
+    return new Promise(function(resolve, reject) {
         cloudinary.v2.uploader.upload_stream({
             public_id: filename,
             overwrite: true,
             resource_type: "raw",
             invalidate: true
-        }, function (error, result) {
+        }, function(error, result) {
             if (error) return reject(JSON.stringify(error));
             resolve("Uploaded " + filename + " to Cloudinary");
         }).end(data);
@@ -145,79 +140,81 @@ function uploadToCloudinary(obj) {
 }
 
 function getFromCloudinary(obj) {
-	var filename = obj.filename;
-	var version = obj.version;
+    var filename = obj.filename;
+    var version = obj.version;
 
-    return new Promise(function (resolve, reject) {
+    return new Promise(function(resolve, reject) {
         https.request({
             host: "res.cloudinary.com",
             port: 443,
             path: "/hm6jonksx/raw/upload/v" + version + "/" + filename,
             method: "GET"
-        }, function (response, error) {
+        }, function(response, error) {
             if (error) return reject(error);
 
             var body = "";
 
-            response.on("data", function (data) { body += data; });
-            response.on("end", function () { resolve({
-            	filename: filename,
-            	data: body
-            }); });
-            response.on("error", function (error) { reject(error); });
+            response.on("data", function(data) { body += data; });
+            response.on("end", function() {
+                resolve({
+                    filename: filename,
+                    data: body
+                });
+            });
+            response.on("error", function(error) { reject(error); });
         }).end();
     });
 }
 
 function getLatestVersion(filename) {
-    return new Promise(function (resolve, reject) {
+    return new Promise(function(resolve, reject) {
         https.request({
             host: "api.cloudinary.com",
             port: 443,
             path: "/v1_1/hm6jonksx/resources/raw?public_ids=" + filename,
             method: "GET",
             headers: {
-                "Authorization": "Basic " + new Buffer("665979853636441:8hfmvRRUzx_3l2D7N6fhYVKL7z4").toString("base64")
+                "Authorization": "Basic " + new Buffer("").toString("base64")
             }
-        }, function (response, error) {
+        }, function(response, error) {
             if (error) return reject(error);
 
             var body = "";
 
-            response.on("data", function (data) { body += data; });
-            response.on("end", function () {
+            response.on("data", function(data) { body += data; });
+            response.on("end", function() {
                 var obj = JSON.parse(body);
 
                 if (obj.resources.length === 0) return reject("Missing: " + filename);
 
                 resolve({
-                	filename: filename,
-                	version: obj.resources[0].version
+                    filename: filename,
+                    version: obj.resources[0].version
                 });
             });
-            response.on("error", function (error) { reject(error); });
+            response.on("error", function(error) { reject(error); });
         }).end();
     });
 }
 
 function readFile(filename) {
-    return new Promise(function (resolve, reject) {
+    return new Promise(function(resolve, reject) {
         fs.readFile(filename, function read(error, data) {
-            if (error) return reject(error); 
+            if (error) return reject(error);
             resolve({
-            	filename: filename,
-            	data: data
+                filename: filename,
+                data: data
             });
         });
     });
 }
 
 function writeFile(obj) {
-	var filename = obj.filename;
-	var data = obj.data;
+    var filename = obj.filename;
+    var data = obj.data;
 
-    return new Promise(function (resolve, reject) {
-        fs.writeFile(filename, data, function (error) {
+    return new Promise(function(resolve, reject) {
+        fs.writeFile(filename, data, function(error) {
             if (error) return reject(error);
             resolve("Wrote " + filename + " to disk.");
         });
@@ -229,17 +226,17 @@ function writeFile(obj) {
 function restoreDB(callback) {
     var data = getLatestVersion("loki.json").then(getFromCloudinary).then(writeFile).then(console.log);
 
-    Promise.all([data]).then(function () {
+    Promise.all([data]).then(function() {
         console.log("Restore DB success");
 
-        db.loadDatabase({}, function (error) {
+        db.loadDatabase({}, function(error) {
             if (error) return console.log(error);
 
             mainCollection = db.getCollection("main");
             callback();
         });
-    }).catch(function (error) {
-        if (error.indexOf("Missing:") === 0) return db.saveDatabase(function (error) {
+    }).catch(function(error) {
+        if (error.indexOf("Missing:") === 0) return db.saveDatabase(function(error) {
             if (error) return console.log("Save database failed: " + error);
 
             callback();
@@ -250,14 +247,14 @@ function restoreDB(callback) {
 }
 
 function backupDB() {
-    db.saveDatabase(function (error) {
+    db.saveDatabase(function(error) {
         if (error) return console.log("Save database failed: " + error);
 
         var data = readFile("loki.json").then(uploadToCloudinary).then(console.log);
 
-        Promise.all([data]).then(function () {
+        Promise.all([data]).then(function() {
             console.log("Backup DB success");
-        }).catch(function (error) {
+        }).catch(function(error) {
             console.log("Backup DB error: " + error);
         });
     });
